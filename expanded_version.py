@@ -1,12 +1,12 @@
 from __future__ import annotations 
 import math 
-import dataclasses import dataclass,field
+from dataclasses import dataclass,field
 from typing import List, Optional, Tuple
 import numpy as np
 
 import random 
 import pygame
-import pygame.math import Vector2 as Vec2
+from pygame.math import Vector2 as Vec2
 
 WIDTH, HEIGHT = 800, 600
 FPS = 60
@@ -57,3 +57,4 @@ def bisection_dir_from(point: Vec2, sink_indices: List[int]) -> Vec2:
     if s.length_squared() == 0: 
         return Vec2(1, 0)
     return s.normalize()
+# the bisection line 
