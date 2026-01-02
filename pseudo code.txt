@@ -1,0 +1,46 @@
+Objective: making a network from a source to multiple sinks, 
+
+Class robots:
+
+assigned sinks=[all sinks]  # sinks also are another class each sink has the positin value 
+node.type="moving"  # all robots are moving up until they become network robot 
+node.role=Straight  # it can be whether straight or pivot (pivot will be selected based on the fact that robot has the lowest pivot suitability error)
+node.parent=[]
+node.child=[]
+node.pivotsuitability=[]
+touched_sink=  whether the robot touches the a sink or not , it will be used later to reverese the guidance direction, which sinks touched and is it touched or not.
+
+class sink :
+
+position=[] # it will be defined when we give them stationary position at the beginning of simulation 
+
+
+functions that I need :
+
+
+bisection_direction:
+input(assigned sinks, robot)
+the bisection direction that we make a hole for the child robot to be there is going to lie on this direction 
+output, the bisection directions 
+what happen in this function?  robot goes through all sinks assigned to it by reading assigned sinks, divided them based on its position and the parent position , a line from parent to robot , to starboard adn port , and then 
+find the average vector pointing to starboard, and also average vector pointing toward all sinks in port, and then get unit vector of each side and then adding them to each other to find the bisection direction,
+
+
+free_move
+each robot as a moving role first follow the unit vector direction towards the source, when reaches the source follows the guidance direction up until finding its parent 
+
+
+message class
+
+each robot asks the robot in its vicinity (communication range )do you have a parent, if it does not have parent, and the robot itself has the capicty(straight robot=1 and pivot robot=2) it will adopt the child. if not it sends the guidance direction to the other robot to follow . 
+
+
+attach behavior
+when robot attaches, it calculated its own pivot suitability , pivot suitability (going through ssiegned sinsk,divid them to starboarad and port (we can do this if has at least two sinks in our assigned sinks)) here is the criteria
+pivot suitability(abs(120-angle between parent to child and the starboard sinks(average of all robots in starboard)+abs(120-angle between parent to child and the port sinks(average of all robots in port) )) if it was better than its own child and the parent, it becomes pivot 
+
+after having a pivot, pivot will have two voids in the both starboard and port , the robot whenter they are on port or starboard will loose one of their assigned sinks, the one that they are not either in their branch, this will happne again for the next pivot , up untiil eahc robot at the end hasjust one assigned sinks 
+
+
+
+the guidance vector: this is for the robots that have the netwokr role, (they become network when they become the child of the one of the network robot ), this vector is from source to pivot , and then pivot to branches, it will be towards the branches that has less robot , or , we can say we have one of the branches direciton as default and when it reaches the sink, the guidance will be switched to other branch , the first direciton can be random, when sinked touched the direction will be reversed towards the pivot, it 

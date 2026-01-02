@@ -38,7 +38,7 @@ SOURCE_POS = Vec2(WIDTH/2 - SIDE/2, HEIGHT/2 + SIDE/4)+Vec2(-100,100)
 # Equilateral triangle: base from SOURCE_POS to SINK1_POS, apex at SINK2_POS
 SINK1_POS = SOURCE_POS + Vec2(SIDE, 0.0)+Vec2(10,100)
 SINK2_POS = SOURCE_POS + Vec2(SIDE/2.0,
-                              - (math.sqrt(3)/2.0) * SIDE)+Vec2(10,-170)
+                              - (math.sqrt(3)/2.0) * SIDE)+Vec2(100,-100)
 
 
 
