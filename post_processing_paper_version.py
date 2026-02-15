@@ -516,7 +516,7 @@ def generate_report(
             ax.scatter(r.pos.x, r.pos.y, c='royalblue', s=ROBOT_MARKER_SIZE, marker='o', edgecolors='black', linewidths=1, zorder=3)
             ax.annotate(f'{r.rid}', (r.pos.x + 8, r.pos.y - 5), fontsize=6, color='blue', alpha=0.7, zorder=6)
         else:
-            ax.scatter(r.pos.x, r.pos.y, c='cyan', s=ROBOT_MARKER_SIZE//2, marker='o', alpha=0.5, zorder=2)
+            ax.scatter(r.pos.x, r.pos.y, c='cyan', s=(ROBOT_MARKER_SIZE//2)*3, marker='o', alpha=0.5, zorder=2)
     
     # Plot void positions
     for r in robots:

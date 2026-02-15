@@ -21,21 +21,21 @@ FPS = 120
 # =========================
 R = 60                   # desired separation distance (void radius)
 COMM_RANGE = 3 * R        # communication radius; must be > R
-SPEED_MAX =200           # max speed
+SPEED_MAX =100           # max speed
 SINK_TOUCH_DIST = 1*R       # distance to consider sink touched
 
 # Void controller gains
-K_R = 100                # radial gain
-K_THETA = 150          # angular gain
+K_R = 50                # radial gain
+K_THETA = 80          # angular gain
 
 # Pivot eligibility thresholds
 POS_THRESH = 2            # settled threshold for local pivot eligibility
-PIVOT_THRESHOLD =60      # smaller => harder to become pivot
-SINK_TOUCH_SETTLEMENT_THRESH = 1  # allow sink touch when within ~1-2 units of void
+PIVOT_THRESHOLD =100     # smaller => harder to become pivot
+SINK_TOUCH_SETTLEMENT_THRESH = 0.1  # allow sink touch when within ~1-2 units of void
 
 # Robot spawning
 MAX_ROBOTS = 500
-SPAWN_INTERVAL =5
+SPAWN_INTERVAL =20
 
 # Guidance
 GUIDANCE_STICK_FRAMES = 0 # short lock to keep recruitment priority over guidance
@@ -43,16 +43,16 @@ GUIDANCE_STICK_FRAMES = 0 # short lock to keep recruitment priority over guidanc
 # =========================
 # SINK CONFIGURATION
 # =========================
-NUM_SINKS = 10            # number of sinks to place
-SINK_SPACE_WIDTH = 2000   # Width of random sink placement region
-SINK_SPACE_HEIGHT = 2000 # Height of random sink placement region
+NUM_SINKS = 55           # number of sinks to place
+SINK_SPACE_WIDTH = 1000*2.5   # Width of random sink placement region
+SINK_SPACE_HEIGHT = 1000*2.5# Height of random sink placement region
 SINK_MIN_SEP = 5          # Minimum separation between sinks (multiplied by COMM_RANGE)
 SINK_RING_R = 400         # radius for demo sink placement (legacy)
 
 # =========================
 # VISUALIZATION SETTINGS
 # =========================
-VISUALIZE_ON = False       # Set to False for headless mode (faster simulation)
+VISUALIZE_ON =False     # Set to False for headless mode (faster simulation)
 PIVOT_MARKER_SIZE = 25    # Size for pivot robots in plots
 ROBOT_MARKER_SIZE = 12    # Size for regular network robots in plots
 SINK_MARKER_SIZE = 10     # Size for sinks in plots

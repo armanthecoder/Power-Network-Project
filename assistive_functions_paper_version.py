@@ -153,6 +153,10 @@ def _source_behavior(robot: Robot, dt: float, robots: List[Robot], sinks: List[S
             if msg.payload.get("has_parent", True):
                 continue
 
+            # Only accept if the free robot chose US as its preferred parent
+            if msg.payload.get("responding_to") != robot.rid:
+                continue
+
             child_id = msg.sender_id
             robot.children_ids.append(child_id)
 
@@ -213,8 +217,9 @@ def _free_behavior(robot: Robot, dt: float, robots: List[Robot], sinks: List[Sin
         robot.guidance_lock_robot_id = None
         robot.guidance_lock_frames = 0
 
-        robot.broadcast("PARENT_STATUS", has_parent=False)
         best_id = min(valid_askers, key=lambda aid: (robots[aid].pos - robot.pos).length())
+        # Address the response to the chosen recruiter only
+        robot.broadcast("PARENT_STATUS", has_parent=False, responding_to=best_id)
         _simple_move_towards(robot, robots[best_id].pos, dt)
     else:
         # Follow guidance with stickiness
@@ -288,14 +293,20 @@ def _free_behavior(robot: Robot, dt: float, robots: List[Robot], sinks: List[Sin
     # Process ACCEPT_CHILD
     for msg in robot.inbox:
         if msg.msg_type == "ACCEPT_CHILD" and msg.payload.get("child_id") == robot.rid:
-            robot.parent_id = msg.payload["parent_id"]
+            parent_id = msg.payload["parent_id"]
+            parent_robot = robots[parent_id]
+            robot.parent_id = parent_id
             robot.role = Role.NETWORK
             robot.desired_R = float(msg.payload["R"])
             d = Vec2(msg.payload["d_x"], msg.payload["d_y"])
             robot.desired_dir_d = safe_normalize(d)
             robot.sink_indices = list(msg.payload.get("sink_indices", robot.sink_indices))
             robot.branch_id = msg.payload.get("branch_id", "1")
-            print(f"[NETWORK] Robot {robot.rid} accepted as child of Robot {robot.parent_id} (branch: {robot.branch_id})")
+            parent_type = parent_robot.node_type
+            parent_parent_type = robots[parent_robot.parent_id].node_type if parent_robot.parent_id is not None else "NONE"
+            print(f"[NETWORK] Robot {robot.rid} accepted as child of Robot {parent_id} "
+                  f"(branch: {robot.branch_id}, parent_type={parent_type}, "
+                  f"grandparent_type={parent_parent_type}, sinks={robot.sink_indices[:8]})")
 
 
 def _attached_behavior(robot: Robot, dt: float, robots: List[Robot], sinks: List[Sink], touched: List[bool]):
@@ -322,6 +333,9 @@ def _attached_behavior(robot: Robot, dt: float, robots: List[Robot], sinks: List
 
     # Decide if I should recruit
     done = all(touched[sid] for sid in robot.sink_indices) if robot.sink_indices else False
+
+    # Check if this robot is a child of a pivot (for debug tracing)
+    is_pivot_child = (robot.parent_id is not None and robots[robot.parent_id].node_type == NodeType.PIVOT)
 
     if robot.node_type == NodeType.PIVOT:
         # Pivot recruits aggressively if has free slot and not done
@@ -370,6 +384,10 @@ def _attached_behavior(robot: Robot, dt: float, robots: List[Robot], sinks: List
     for msg in robot.inbox:
         if msg.msg_type == "PARENT_STATUS" and can_recruit:
             if msg.payload.get("has_parent", True):
+                continue
+
+            # Only accept if the free robot chose US as its preferred parent
+            if msg.payload.get("responding_to") != robot.rid:
                 continue
 
             child_id = msg.sender_id
@@ -877,7 +895,6 @@ def enforce_pivot_split(
         child.desired_dir_d = safe_normalize(dir_vec)
         child.void_pos_vis = p.pos + child.desired_dir_d * child.desired_R
         child.max_children = 1
-        print(f"[orient_child] child={cid} dir toward side_sinks={side_sinks}, child.sink_indices={child.sink_indices}")
 
     for cid in side_to_children["STAR"]:
         orient_child(cid, star_sinks)

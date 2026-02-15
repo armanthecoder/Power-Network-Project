@@ -21,7 +21,8 @@ from assistive_functions_paper_version import (
     robot_step, deliver_messages,
     compute_touched_sinks, remove_sink_from_subtree,
     calc_pivot_metric, is_local_pivot_candidate,
-    enforce_pivot_split, make_demo_sinks
+    enforce_pivot_split, make_demo_sinks,
+    guidance_dir_from_robot, safe_normalize
 )
 
 from post_processing_paper_version import generate_report
@@ -74,6 +75,7 @@ def main():
     next_spawn_time = 1.0
     network_complete_time: Optional[float] = None
     touched = [False] * len(sinks)  # Initialize touched list
+    MAX_SIM_TIME = 1200000.0  # DEBUG: stop after 60 seconds sim time
 
     running = True
     try:
@@ -85,8 +87,8 @@ def main():
                     if event.type == pygame.QUIT:
                         running = False
             
-            # In headless mode, stop when network is complete
-            if not VISUALIZE_ON and network_complete_time is not None:
+            # In headless mode, stop when network is complete or max time reached
+            if not VISUALIZE_ON and (network_complete_time is not None or sim_time > MAX_SIM_TIME):
                 running = False
                 continue
 
@@ -122,7 +124,7 @@ def main():
                 dt = clock.tick(FPS) / 1000.0
                 dt = min(dt, 0.1)  # Cap dt to prevent huge jumps
             else:
-                dt = 1.0 / FPS  # Fixed timestep for headless
+                dt =( 1.0 / FPS )*1# Fixed timestep for headless
             sim_time += dt
 
             # Sink removal for settled robots
@@ -237,6 +239,43 @@ def main():
                     if r.role == Role.NETWORK or r.role == Role.SOURCE:
                         screen.blit(font.render(f"B:{r.branch_id}", True, (100, 200, 255)),
                                     (r.pos.x - 20, r.pos.y - 25))
+
+                    # --- GUIDANCE VECTOR arrow ---
+                    if r.role == Role.NETWORK:
+                        g = guidance_dir_from_robot(r, robots, sinks, touched)
+                        if g is not None:
+                            gu = safe_normalize(g)
+                            arrow_len = 30
+                            tip = r.pos + gu * arrow_len
+                            pygame.draw.line(screen, (0, 255, 128), r.pos, tip, 2)
+                            # small arrowhead
+                            perp = Vec2(-gu.y, gu.x)
+                            pygame.draw.line(screen, (0, 255, 128), tip, tip - gu * 6 + perp * 4, 1)
+                            pygame.draw.line(screen, (0, 255, 128), tip, tip - gu * 6 - perp * 4, 1)
+
+                    # --- CAN_RECRUIT label (1 or 0) ---
+                    if r.role == Role.NETWORK and r.node_type != NodeType.PIVOT:
+                        cr_done = all(touched[sid] for sid in r.sink_indices) if r.sink_indices else False
+                        cr_leaf_zero = len(r.sink_indices) == 0 and not r.children_ids
+                        if cr_done:
+                            cr = r.has_free_slot() and not cr_leaf_zero
+                        else:
+                            cr_has_distant = any(
+                                (sinks[sid].pos - r.pos).length() > SINK_TOUCH_DIST
+                                for sid in r.sink_indices
+                            )
+                            cr_all_near = not cr_has_distant and len(r.sink_indices) > 0
+                            cr = r.has_free_slot() and not cr_all_near and not cr_leaf_zero
+                        cr_col = (0, 255, 0) if cr else (255, 80, 80)
+                        screen.blit(font.render(f"CR:{int(cr)}", True, cr_col),
+                                    (r.pos.x - 20, r.pos.y + 26))
+                    elif r.node_type == NodeType.PIVOT:
+                        cr_done = all(touched[sid] for sid in r.sink_indices) if r.sink_indices else False
+                        cr_leaf_zero = len(r.sink_indices) == 0 and not r.children_ids
+                        cr = (not cr_done) and r.has_free_slot() and not cr_leaf_zero
+                        cr_col = (0, 255, 0) if cr else (255, 80, 80)
+                        screen.blit(font.render(f"CR:{int(cr)}", True, cr_col),
+                                    (r.pos.x - 20, r.pos.y + 26))
 
                 pygame.display.flip()
 
