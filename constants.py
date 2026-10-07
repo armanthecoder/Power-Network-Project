@@ -19,9 +19,9 @@ FPS = 120
 # =========================
 # NETWORK FORMATION PARAMETERS
 # =========================
-R = 20                      # desired separation distance (void radius)
+R = 25                # desired separation distance (void radius)
 COMM_RANGE = 2 * R                  # communication radius; must be > R
-SPEED_MAX = 75                      # max speed
+SPEED_MAX = 200                      # max speed
 SINK_TOUCH_DIST = 1 * R             # distance to consider sink "touched"
 
 # Void controller gains
@@ -30,21 +30,76 @@ K_THETA = 70                        # angular gain
 
 # Pivot eligibility thresholds
 POS_THRESH = 1                      # settled threshold for local pivot eligibility
-PIVOT_THRESHOLD =60    # raw angular error threshold (E); robot must have E <= this
+PIVOT_THRESHOLD =40    # raw angular error threshold (E); robot must have E <= this
 PIVOT_SCORE_THRESHOLD = max(0.0, 1.0 - PIVOT_THRESHOLD / 120.0)  # normalized: 1 - E/120
 SINK_TOUCH_SETTLEMENT_THRESH = 3 # robot must be this close to void pos to count as touching
+MAX_TURN_DEG = 2.0               # max degrees desired_dir_d can rotate per step during redirection
 RECRUIT_SETTLE_THRESH = 1           # robot must be this close to its void pos before recruiting
 
 # Pivot scoring mode:
 #   0 = default: score = max(0, 1 - E/120)  (no sink proximity bonus)
 #   1 = score-based: score = max(0, 1 - E/120) + 0.2 * sink_in_desired_range
 PIVOT_SCORE_MODE = 0
+# =========================
+# TRAITOR (DUTCH AUCTION) PARAMETERS
+# =========================
+W_BATTERY = 2    # weight on (100 - charging_level)/100 of candidate sink
+W_HOP     = 0.4  # weight on 1/(1+hop_count_to_own_sink) — closer to own sink, better donor
+W_PIVOT   = 0.4
+W_HYST    = 0.2  # flat hysteresis penalty subtracted from every candidate score
+W_DWELL   = 0.5     # extra per-tick hysteresis penalty while a sink-toucher
+                     # hasn't dwelled at its sink for MIN_DWELL_TICKS yet —
+                     # without this, the auction always prefers the toucher
+                     # (hop_count=0) and immediately un-touches whatever sink
+                     # was just reached, so no two sinks are ever touched at
+                     # once and the network never completes
+MIN_DWELL_TICKS = 600  # ~50s at FPS=120 — long enough to outlast a flock's
+                          # spawn-to-settle cycle (SPAWN_INTERVAL=20s plus
+                          # travel time), so a freshly-touched sink isn't
+                          # raided again before the other branches have had a
+                          # real chance to finish growing
+TRAITOR_SCORE_THRESHOLD = 1.0   # minimum winning score required to actually defect
+MAX_TRAITORS = 3   # how many robots may hold Role.TRAITOR at once; the auction
+                     # tops this up by one winner per tick, each one excluded
+                     # from being picked again this same tick (role flips to
+                     # TRAITOR immediately) and each claiming a different
+                     # target sink from the others picked this tick
+TRAITOR_ELIGIBLE_CHARGE_THRESHOLD = 5 # a chain is also eligible (even if
+                                            # NOT currently touched live) once
+                                            # its sink's charge is at/above
+                                            # this level — under scarcity, a
+                                            # chain's tip can itself defect
+                                            # away, instantly un-touching the
+                                            # sink and stranding the rest of
+                                            # the chain forever if eligibility
+                                            # required live touched[] alone
+TRAITOR_GRACE_TICKS = 20   # ticks right after defecting during which a Traitor
+                            # won't respond to ANY recruitment — otherwise a
+                            # shortened chain that falls just short of its sink
+                            # can instantly re-recruit the very robot that just
+                            # left it (self-cannibalizing oscillation)
+CANDIDATE_SWITCH_COOLDOWN_TICKS = 10  # min ticks between candidate re-picks,
+                                        # so a Traitor doesn't flip-flop
+                                        # between two sinks tick-to-tick
+OLD_SINK_REVISIT_COOLDOWN_TICKS = 200  # ticks before a Traitor may re-target
+                                         # the sink it just defected from —
+                                         # not a permanent ban, just a cooldown
+OLD_PARENT_REVISIT_COOLDOWN_TICKS = 100  # ticks before a Traitor may respond
+                                           # to its own old parent again — not
+                                           # a permanent ban either, otherwise
+                                           # it can end up refusing to ever
+                                           # refill the exact slot it left if
+                                           # nothing else is around
+SPLICE_COOLDOWN_TICKS = 60  # ticks a spliced node (see convert_to_traitor)
+                             # is barred from recruiting a replacement — gives
+                             # the defector real time to clear out first
+
 # Robot spawning
-MAX_ROBOTS = 65
+MAX_ROBOTS = 85
 SPAWN_INTERVAL = 20                 # sim-time between flock releases
 
 # Flock spawning (circle formation)
-FLOCK_SIZE = 12                      # robots per flock
+FLOCK_SIZE = 85                      # robots per flock
 FLOCK_RADIUS = 1.0                  # circle radius as multiple of R
 
 # Guidance
@@ -62,9 +117,15 @@ BOID_ALIGN_WEIGHT    = 2.0
 # =========================
 # SINK CONFIGURATION
 # =========================
-NUM_SINKS = 5
-SINK_SPACE_WIDTH  = 2500/5
-SINK_SPACE_HEIGHT = 2500/5
+NUM_SINKS =10
+PHASE_CHARGE_THRESHOLD = 80.0      # sink level (%) that triggers adding the next sink
+SINK_DISCHARGE_RATE = 0.01   # per-tick charge lost while untouched
+SINK_CHARGE_RATE    = 0.05   # per-tick charge gained while touched — a flat
+                              # rate per touched sink (not divided among
+                              # however many are touched at once), kept at
+                              # 2x SINK_DISCHARGE_RATE
+SINK_SPACE_WIDTH  = 2500/3.5
+SINK_SPACE_HEIGHT = 2500/3.5
 SINK_MIN_SEP = 5                    # multiplied by COMM_RANGE
 
 # =========================
@@ -89,6 +150,7 @@ class Role:
     MOVING  = "MOVING"
     NETWORK = "NETWORK"
     SOURCE  = "SOURCE"
+    TRAITOR = "TRAITOR"
 
 
 class NodeType:
@@ -170,11 +232,42 @@ class Robot:
     # Sink-seeing state (triggers zero capacity and propagates "done" signal)
     sees_sink: bool = False
 
+    # Ticks since this robot became a sink-toucher (0 = just touched) —
+    # used to give a freshly-settled toucher temporary immunity from the
+    # traitor auction, see MIN_DWELL_TICKS / W_DWELL
+    ticks_since_sink_touch: int = 0
+
     # Branch-pruning cooldown: steps remaining before pivot can recruit on freed side
     pivot_cooldown: int = 0
 
+    # TRAITOR only: the parent it just defected from, so it won't immediately
+    # re-accept its own just-vacated slot (undoing the defection every tick) —
+    # off-limits until old_parent_cooldown expires, not a permanent ban
+    old_parent_id: Optional[int] = None
+    old_parent_cooldown: int = 0
+
+    # TRAITOR only: ticks remaining before it may respond to ANY recruitment
+    traitor_grace: int = 0
+
+    # TRAITOR only: ticks remaining before it may re-pick its candidate sink
+    candidate_cooldown: int = 0
+
+    # TRAITOR only: the sink it was serving before defecting — off-limits as
+    # a (re-)pick target until old_sink_cooldown expires (not a permanent ban)
+    old_sink_id: Optional[int] = None
+    old_sink_cooldown: int = 0
+
     # Battery reports accumulated at a pivot: {"STAR": level, "PORT": level}
     battery_reports: Dict[str, float] = field(default_factory=dict)
+
+    # SOURCE only: which sink is currently being serviced (phase 1)
+    current_target_sid: Optional[int] = None
+
+    # SOURCE only: ideal branching angle (degrees) for the most recent phase transition
+    pivot_target_angle: Optional[float] = None
+
+    # SOURCE only: sinks currently in the network (grows one per phase transition)
+    served_sinks: List[int] = field(default_factory=list)
 
     def __post_init__(self):
         self.prev_pos = Vec2(self.pos)

@@ -17,6 +17,8 @@ from constants import (
     MAX_ROBOTS, SPAWN_INTERVAL, PIVOT_SCORE_THRESHOLD,
     SINK_TOUCH_SETTLEMENT_THRESH, RECRUIT_SETTLE_THRESH,
     VISUALIZE_ON, FLOCK_SIZE, FLOCK_RADIUS, PIVOT_SCORE_MODE,
+    W_BATTERY, W_HOP, W_PIVOT, W_HYST, TRAITOR_SCORE_THRESHOLD, MAX_TRAITORS,
+    W_DWELL, MIN_DWELL_TICKS, SINK_CHARGE_RATE, SINK_DISCHARGE_RATE,
 )
 from assistive_functions import (
     robot_step, deliver_messages,
@@ -25,6 +27,8 @@ from assistive_functions import (
     enforce_pivot_split, make_demo_sinks,
     compute_hop_counts,
     tick_pivot_cooldowns,
+    is_traitor_eligible, hop_count_to_own_sink, chain_toucher_dwell_ticks,
+    pivot_distance, convert_to_traitor,
 )
 from post_processing import generate_report
 
@@ -130,9 +134,9 @@ def main():
             # ---- Update sink charging levels every step ----
             for s in sinks:
                 if touched[s.sid]:
-                    s.charging_level = min(100.0, s.charging_level + 0.01)
+                    s.charging_level = min(100.0, s.charging_level + SINK_CHARGE_RATE)
                 else:
-                    s.charging_level = max(0.0, s.charging_level - 0.01)
+                    s.charging_level = max(0.0, s.charging_level - SINK_DISCHARGE_RATE)
 
             # ---- Pivot cooldown tick (every step) ----
             tick_pivot_cooldowns(robots)
@@ -153,12 +157,13 @@ def main():
                         remove_sink_from_subtree(robots, r.rid, s.sid)
 
             # ---- Compute pivot errors ----
+            pivot_target = 120.0
             errors: Dict[int, Optional[float]] = {}
             for r in robots:
                 if r.role != Role.NETWORK or len(r.sink_indices) < 2:
                     errors[r.rid] = None
                 else:
-                    errors[r.rid] = calc_pivot_metric(r, robots, sinks)
+                    errors[r.rid] = calc_pivot_metric(r, robots, sinks, target_angle=pivot_target)
 
             scores: Dict[int, Optional[float]] = {}
             for r in robots:
@@ -192,6 +197,39 @@ def main():
 
             for pivot_id in pivot_candidates:
                 enforce_pivot_split(pivot_id, robots, sinks)
+
+            # ---- Traitor Dutch auction (tops up to MAX_TRAITORS in flight) ----
+            current_traitors = sum(1 for r in robots if r.role == Role.TRAITOR)
+            claimed_sids: set = set()
+            while current_traitors < MAX_TRAITORS:
+                best_pair  = None
+                best_score = float("-inf")
+                for r in robots:
+                    if not is_traitor_eligible(r, robots, touched, sinks):
+                        continue
+                    hop      = hop_count_to_own_sink(r, robots)
+                    hop_term = (W_HOP / (1.0 + hop)) if hop is not None else 0.0
+                    dwell = chain_toucher_dwell_ticks(r, robots)
+                    dwell_penalty = (W_DWELL * max(0, MIN_DWELL_TICKS - dwell)
+                                     if dwell is not None else 0.0)
+                    for s in sinks:
+                        if touched[s.sid] or s.sid in r.sink_indices or s.sid in claimed_sids:
+                            continue
+                        pd    = pivot_distance(r, robots, s.sid)
+                        score = (W_BATTERY * (100.0 - s.charging_level) / 100.0
+                                 + hop_term
+                                 + W_PIVOT / (1.0 + pd)
+                                 - W_HYST
+                                 - dwell_penalty)
+                        if score > best_score:
+                            best_score, best_pair = score, (r, s)
+
+                if best_pair is None or best_score < TRAITOR_SCORE_THRESHOLD:
+                    break
+                traitor_robot, target_sink = best_pair
+                convert_to_traitor(traitor_robot, target_sink.sid, robots, sinks)
+                claimed_sids.add(target_sink.sid)
+                current_traitors += 1
 
             # ---- Deliver messages ----
             deliver_messages(robots)
@@ -241,6 +279,8 @@ def main():
                     color, rad = (255, 0, 255), 8
                 elif r.role == Role.NETWORK:
                     color, rad = (200, 200, 255), 7
+                elif r.role == Role.TRAITOR:
+                    color, rad = (255, 140, 0), 9
                 else:
                     color, rad = (0, 160, 255), 7
 
@@ -357,12 +397,13 @@ def run_simulation(pivot_threshold: float, max_sim_time: float = 80.0) -> tuple:
                 if (s.pos - r.pos).length() <= SINK_TOUCH_SETTLEMENT_THRESH:
                     remove_sink_from_subtree(robots, r.rid, s.sid)
 
+        pivot_target = 120.0
         errors: Dict[int, Optional[float]] = {}
         for r in robots:
             if r.role != Role.NETWORK or len(r.sink_indices) < 2:
                 errors[r.rid] = None
             else:
-                errors[r.rid] = calc_pivot_metric(r, robots, sinks)
+                errors[r.rid] = calc_pivot_metric(r, robots, sinks, target_angle=pivot_target)
 
         scores: Dict[int, Optional[float]] = {}
         for r in robots:
@@ -395,6 +436,39 @@ def run_simulation(pivot_threshold: float, max_sim_time: float = 80.0) -> tuple:
 
         for pivot_id in pivot_candidates:
             enforce_pivot_split(pivot_id, robots, sinks)
+
+        # ---- Traitor Dutch auction (tops up to MAX_TRAITORS in flight) ----
+        current_traitors = sum(1 for r in robots if r.role == Role.TRAITOR)
+        claimed_sids: set = set()
+        while current_traitors < MAX_TRAITORS:
+            best_pair  = None
+            best_score = float("-inf")
+            for r in robots:
+                if not is_traitor_eligible(r, robots, touched, sinks):
+                    continue
+                hop      = hop_count_to_own_sink(r, robots)
+                hop_term = (W_HOP / (1.0 + hop)) if hop is not None else 0.0
+                dwell = chain_toucher_dwell_ticks(r, robots)
+                dwell_penalty = (W_DWELL * max(0, MIN_DWELL_TICKS - dwell)
+                                 if dwell is not None else 0.0)
+                for s in sinks:
+                    if touched[s.sid] or s.sid in r.sink_indices or s.sid in claimed_sids:
+                        continue
+                    pd    = pivot_distance(r, robots, s.sid)
+                    score = (W_BATTERY * (100.0 - s.charging_level) / 100.0
+                             + hop_term
+                             + W_PIVOT / (1.0 + pd)
+                             - W_HYST
+                             - dwell_penalty)
+                    if score > best_score:
+                        best_score, best_pair = score, (r, s)
+
+            if best_pair is None or best_score < TRAITOR_SCORE_THRESHOLD:
+                break
+            traitor_robot, target_sink = best_pair
+            convert_to_traitor(traitor_robot, target_sink.sid, robots, sinks)
+            claimed_sids.add(target_sink.sid)
+            current_traitors += 1
 
         deliver_messages(robots)
         for r in robots:
