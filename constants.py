@@ -21,7 +21,7 @@ FPS = 120
 # =========================
 R = 25                # desired separation distance (void radius)
 COMM_RANGE = 2 * R                  # communication radius; must be > R
-SPEED_MAX = 200                      # max speed
+SPEED_MAX = 150                     # max speed
 SINK_TOUCH_DIST = 1 * R             # distance to consider sink "touched"
 
 # Void controller gains
@@ -30,8 +30,13 @@ K_THETA = 70                        # angular gain
 
 # Pivot eligibility thresholds
 POS_THRESH = 1                      # settled threshold for local pivot eligibility
-PIVOT_THRESHOLD =40    # raw angular error threshold (E); robot must have E <= this
+PIVOT_THRESHOLD =35    # raw angular error threshold (E); logged/displayed only —
+                        # no longer used to trigger pivoting, see PIVOT_ZETA_THRESHOLD
 PIVOT_SCORE_THRESHOLD = max(0.0, 1.0 - PIVOT_THRESHOLD / 120.0)  # normalized: 1 - E/120
+                        # (display-only, paired with PIVOT_THRESHOLD above)
+PIVOT_ZETA_THRESHOLD = 1.0   # robot becomes a PIVOT once zeta <= this (see
+                              # calc_pivot_zeta) — zeta<=1.0 means the star/port
+                              # side directions are at least 120° apart
 SINK_TOUCH_SETTLEMENT_THRESH = 3 # robot must be this close to void pos to count as touching
 MAX_TURN_DEG = 2.0               # max degrees desired_dir_d can rotate per step during redirection
 RECRUIT_SETTLE_THRESH = 1           # robot must be this close to its void pos before recruiting
@@ -58,9 +63,8 @@ MIN_DWELL_TICKS = 600  # ~50s at FPS=120 — long enough to outlast a flock's
                           # travel time), so a freshly-touched sink isn't
                           # raided again before the other branches have had a
                           # real chance to finish growing
-TRAITOR_SCORE_THRESHOLD = 1.0   # minimum winning score required to actually defect
-MAX_TRAITORS = 3   # how many robots may hold Role.TRAITOR at once; the auction
-                     # tops this up by one winner per tick, each one excluded
+TRAITOR_SCORE_THRESHOLD =0.2 # minimum winning score required to actually defect
+MAX_TRAITORS = 10    # tops this up by one winner per tick, each one excluded
                      # from being picked again this same tick (role flips to
                      # TRAITOR immediately) and each claiming a different
                      # target sink from the others picked this tick
@@ -78,7 +82,7 @@ TRAITOR_GRACE_TICKS = 20   # ticks right after defecting during which a Traitor
                             # shortened chain that falls just short of its sink
                             # can instantly re-recruit the very robot that just
                             # left it (self-cannibalizing oscillation)
-CANDIDATE_SWITCH_COOLDOWN_TICKS = 10  # min ticks between candidate re-picks,
+CANDIDATE_SWITCH_COOLDOWN_TICKS = 200 # min ticks between candidate re-picks,
                                         # so a Traitor doesn't flip-flop
                                         # between two sinks tick-to-tick
 OLD_SINK_REVISIT_COOLDOWN_TICKS = 200  # ticks before a Traitor may re-target
@@ -96,10 +100,11 @@ SPLICE_COOLDOWN_TICKS = 60  # ticks a spliced node (see convert_to_traitor)
 
 # Robot spawning
 MAX_ROBOTS = 85
+
 SPAWN_INTERVAL = 20                 # sim-time between flock releases
 
 # Flock spawning (circle formation)
-FLOCK_SIZE = 85                      # robots per flock
+FLOCK_SIZE = 60                     # robots per flock
 FLOCK_RADIUS = 1.0                  # circle radius as multiple of R
 
 # Guidance

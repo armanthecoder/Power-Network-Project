@@ -958,7 +958,10 @@ def guidance_dir_from_robot(
                     if star_sinks else float("inf"))
         port_sum = (sum(sinks[sid].charging_level for sid in port_sinks)
                     if port_sinks else float("inf"))
-        return port_dir if port_sum < star_sum else star_dir
+        # Tie (including the common both-zero case) resolves to port,
+        # deterministically — otherwise a mover can receive conflicting
+        # left/right guidance tick-to-tick as the two sums hover near equal.
+        return star_dir if star_sum < port_sum else port_dir
     if star_needs:
         return star_dir
     if port_needs:
@@ -1313,6 +1316,41 @@ def calc_pivot_metric(
     theta_port = angle_between_deg(incoming_u, avg_dir_to_sinks(r.pos, port, sinks))
 
     return abs(theta_star - target_angle) + abs(theta_port - target_angle)
+
+
+def calc_pivot_zeta(
+    r:      Robot,
+    robots: List[Robot],
+    sinks:  List[Sink],
+) -> Optional[float]:
+    """
+    Junction-fit metric ζ (replaces E/calc_pivot_metric as the pivot-trigger
+    criterion; E is kept only as a logged/displayed value, no longer used to
+    gate pivoting). Partition r's sinks into star/port (same split as
+    split_sinks_star_port), sum each side's unit bearings into v_star/v_port
+    (each renormalized to unit length via avg_dir_to_sinks), then
+    ζ = |v_star + v_port|.
+
+    ζ ranges from 0 (the two sides point in exactly opposite directions,
+    180° apart — the cleanest possible junction) to 2 (they point the same
+    way, 0° apart — no real junction at all). ζ <= 1.0 corresponds to the
+    two sides being at least 120° apart, which is PIVOT_ZETA_THRESHOLD's
+    default — a robot becomes a pivot once ζ drops to/below that threshold.
+
+    bisection_direction already computes the matching growth direction:
+    normalize(v_star + v_port) is exactly (v_star+v_port)/ζ.
+    """
+    if r.parent_id is None or len(r.sink_indices) < 2:
+        return None
+
+    parent = robots[r.parent_id]
+    star, port = split_sinks_star_port(r.pos, parent.pos, r.sink_indices, sinks)
+    if not star or not port:
+        return None
+
+    v_star = avg_dir_to_sinks(r.pos, star, sinks)
+    v_port = avg_dir_to_sinks(r.pos, port, sinks)
+    return (v_star + v_port).length()
 
 
 def is_local_pivot_candidate(

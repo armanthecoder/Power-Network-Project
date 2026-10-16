@@ -47,10 +47,22 @@ Four files form the simulation core, split by concern:
   - `enforce_pivot_split` promotes a robot to `PIVOT`, splits its `sink_indices` into STAR/PORT sides
     via `split_sinks_star_port`, reassigns/reorients children, and releases duplicate children back to
     `MOVING`.
-  - `calc_pivot_metric` / `is_local_pivot_candidate` score candidate pivots by how close their
-    star/port branch angles are to a target angle (120° by default, or geometry-derived in
-    `pivot_single_sink`); `main.py`'s loop uses these scores each tick to decide which robots to
-    actually turn into pivots.
+  - `calc_pivot_zeta` is the pivot-formation trigger: split a robot's sinks into star/port (via
+    `split_sinks_star_port`), sum each side's unit bearings into `v_star`/`v_port` (each renormalized
+    to unit length via `avg_dir_to_sinks`), then `ζ = |v_star + v_port|`. ζ ranges from 0 (sides point
+    exactly opposite, 180° apart) to 2 (sides point the same way, 0° apart); `ζ <= PIVOT_ZETA_THRESHOLD`
+    (default `1.0`, i.e. the two sides are at least 120° apart) is the condition for becoming a `PIVOT`.
+    `is_local_pivot_candidate` then picks the best candidate *among qualifiers* (`ζ <= threshold`) along
+    a chain by whichever ζ is closest to the threshold from below (the earliest point that's just
+    crossed 120°) — a non-qualifying parent/child must never be able to outscore a qualifying one, or it
+    can block that neighbor from ever being selected (observed as pivoting either never happening or
+    happening unpredictably late). `calc_pivot_metric` (the older E = sum of absolute deviations from a
+    target angle) still exists and is still computed every tick, but purely for the `P:`/`T:` debug
+    overlay — it no longer gates pivot formation. `bisection_direction` already computed the matching
+    growth direction (`normalize(v_star + v_port)`, i.e. `(v_star+v_port)/ζ`) before this change, so it
+    needed no update. `main.py`'s loop uses `calc_pivot_zeta`'s values each tick to decide which robots
+    actually turn into pivots; `run_simulation(pivot_threshold, ...)`'s `pivot_threshold` parameter is
+    now a direct ζ threshold (not a raw-degree E threshold) for the same reason.
   - `remove_sink_from_subtree` / `release_branch_to_moving` / `tick_pivot_cooldowns` implement
     reconfiguration: once a subtree's assigned sinks are all touched/removed, its robots reset to
     `MOVING` and the vacating pivot gets a cooldown (`pivot_cooldown`) before it can recruit on that

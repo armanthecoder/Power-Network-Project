@@ -14,7 +14,7 @@ from pygame.math import Vector2 as Vec2
 from constants import (
     Robot, Sink, Obstacle, Role, NodeType,
     WIDTH, HEIGHT, FPS, R, COMM_RANGE,
-    MAX_ROBOTS, SPAWN_INTERVAL, PIVOT_SCORE_THRESHOLD,
+    MAX_ROBOTS, SPAWN_INTERVAL, PIVOT_ZETA_THRESHOLD,
     SINK_TOUCH_SETTLEMENT_THRESH, RECRUIT_SETTLE_THRESH,
     VISUALIZE_ON, FLOCK_SIZE, FLOCK_RADIUS, PIVOT_SCORE_MODE,
     W_BATTERY, W_HOP, W_PIVOT, W_HYST, TRAITOR_SCORE_THRESHOLD, MAX_TRAITORS,
@@ -23,7 +23,7 @@ from constants import (
 from assistive_functions import (
     robot_step, deliver_messages,
     compute_touched_sinks, remove_sink_from_subtree,
-    calc_pivot_metric, is_local_pivot_candidate,
+    calc_pivot_metric, calc_pivot_zeta, is_local_pivot_candidate,
     enforce_pivot_split, make_demo_sinks,
     compute_hop_counts,
     tick_pivot_cooldowns,
@@ -156,19 +156,23 @@ def main():
                     if (s.pos - r.pos).length() <= SINK_TOUCH_SETTLEMENT_THRESH :
                         remove_sink_from_subtree(robots, r.rid, s.sid)
 
-            # ---- Compute pivot errors ----
+            # ---- Compute pivot metrics: E (legacy, logged/displayed only)
+            #      and zeta (the actual pivot-formation trigger) ----
             pivot_target = 120.0
             errors: Dict[int, Optional[float]] = {}
+            zeta_vals: Dict[int, Optional[float]] = {}
             for r in robots:
                 if r.role != Role.NETWORK or len(r.sink_indices) < 2:
-                    errors[r.rid] = None
+                    errors[r.rid]    = None
+                    zeta_vals[r.rid] = None
                 else:
-                    errors[r.rid] = calc_pivot_metric(r, robots, sinks, target_angle=pivot_target)
+                    errors[r.rid]    = calc_pivot_metric(r, robots, sinks, target_angle=pivot_target)
+                    zeta_vals[r.rid] = calc_pivot_zeta(r, robots, sinks)
 
             scores: Dict[int, Optional[float]] = {}
             for r in robots:
-                E = errors.get(r.rid)
-                if E is None:
+                zeta = zeta_vals.get(r.rid)
+                if zeta is None:
                     scores[r.rid] = None
                 else:
                     sink_bonus = 0.0
@@ -180,7 +184,19 @@ def main():
                                 break
                             elif d <= 2 * R:
                                 sink_bonus = 0.2
-                    scores[r.rid] = max(0.0, 1.0 - E / 120.0) + sink_bonus
+                    # Among candidates that QUALIFY (zeta <= threshold), the
+                    # best is whichever is closest to the threshold from below
+                    # (the shallowest point that's just crossed 120°) — rank
+                    # qualifiers by zeta itself (higher = closer to the line).
+                    # A non-qualifier must never outscore a qualifying parent
+                    # or child, or it can block that neighbor from ever being
+                    # selected (pivoting never happens, or only happens once
+                    # the chain grows deep enough to shake the tie some other
+                    # way) — so it's always scored far below any qualifier.
+                    if zeta <= PIVOT_ZETA_THRESHOLD:
+                        scores[r.rid] = zeta + sink_bonus
+                    else:
+                        scores[r.rid] = zeta - 1000.0 + sink_bonus
 
             # ---- Identify and enforce pivot candidates ----
             pivot_candidates: List[int] = []
@@ -190,8 +206,8 @@ def main():
                     continue
                 if not is_local_pivot_candidate(r.rid, robots, scores):
                     continue
-                E = errors.get(r.rid)
-                if E is None or max(0.0, 1.0 - E / 120.0) < PIVOT_SCORE_THRESHOLD:
+                zeta = zeta_vals.get(r.rid)
+                if zeta is None or zeta > PIVOT_ZETA_THRESHOLD:
                     continue
                 pivot_candidates.append(r.rid)
 
@@ -321,11 +337,12 @@ def main():
 
 def run_simulation(pivot_threshold: float, max_sim_time: float = 80.0) -> tuple:
     """
-    Run one headless simulation with the given pivot_threshold.
+    Run one headless simulation with the given pivot_threshold, now a direct
+    zeta threshold (see calc_pivot_zeta/PIVOT_ZETA_THRESHOLD) — a robot
+    becomes a pivot once its zeta value drops to/below pivot_threshold.
     Returns (network_complete_time, total_robots).
     network_complete_time is None if the network did not complete within max_sim_time.
     """
-    pivot_score_threshold = max(0.0, 1.0 - pivot_threshold / 120.0)
 
     pygame.init()
 
@@ -397,18 +414,17 @@ def run_simulation(pivot_threshold: float, max_sim_time: float = 80.0) -> tuple:
                 if (s.pos - r.pos).length() <= SINK_TOUCH_SETTLEMENT_THRESH:
                     remove_sink_from_subtree(robots, r.rid, s.sid)
 
-        pivot_target = 120.0
-        errors: Dict[int, Optional[float]] = {}
+        zeta_vals: Dict[int, Optional[float]] = {}
         for r in robots:
             if r.role != Role.NETWORK or len(r.sink_indices) < 2:
-                errors[r.rid] = None
+                zeta_vals[r.rid] = None
             else:
-                errors[r.rid] = calc_pivot_metric(r, robots, sinks, target_angle=pivot_target)
+                zeta_vals[r.rid] = calc_pivot_zeta(r, robots, sinks)
 
         scores: Dict[int, Optional[float]] = {}
         for r in robots:
-            E = errors.get(r.rid)
-            if E is None:
+            zeta = zeta_vals.get(r.rid)
+            if zeta is None:
                 scores[r.rid] = None
             else:
                 sink_bonus = 0.0
@@ -420,7 +436,15 @@ def run_simulation(pivot_threshold: float, max_sim_time: float = 80.0) -> tuple:
                             break
                         elif d <= 1.5 * R:
                             sink_bonus = 0.2
-                scores[r.rid] = max(0.0, 1.0 - E / 120.0) + sink_bonus
+                # Among candidates that QUALIFY (zeta <= pivot_threshold), the
+                # best is whichever is closest to the threshold from below —
+                # rank qualifiers by zeta itself (higher = closer to the line).
+                # A non-qualifier must never outscore a qualifying parent or
+                # child, so it's always scored far below any qualifier.
+                if zeta <= pivot_threshold:
+                    scores[r.rid] = zeta + sink_bonus
+                else:
+                    scores[r.rid] = zeta - 1000.0 + sink_bonus
 
         pivot_candidates: List[int] = []
         for r in robots:
@@ -429,8 +453,8 @@ def run_simulation(pivot_threshold: float, max_sim_time: float = 80.0) -> tuple:
                 continue
             if not is_local_pivot_candidate(r.rid, robots, scores):
                 continue
-            E = errors.get(r.rid)
-            if E is None or max(0.0, 1.0 - E / 120.0) < pivot_score_threshold:
+            zeta = zeta_vals.get(r.rid)
+            if zeta is None or zeta > pivot_threshold:
                 continue
             pivot_candidates.append(r.rid)
 
